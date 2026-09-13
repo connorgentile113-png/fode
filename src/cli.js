@@ -3,10 +3,12 @@ import net from 'node:net';
 import { Decoder,encode } from './wire.js';
 import { socketPath } from './paths.js';
 import { serve } from './daemon.js';
+import { launchCodex } from './launch.js';
 const [command,...args]=process.argv.slice(2);
-const help=`Fode • Linux Firefox / ChatGPT / Codex\n\n  fode serve                         Run the persistent harness\n  fode run "task" [--cwd PATH] [--full-access] [--model NAME]\n  fode watch                         Stream ChatGPT, Codex and tool events\n  fode status                        Show connection and pending requests\n  fode stop                          Interrupt the current run\n  fode reply ID '{"decision":"accept"}'\n  fode rpc METHOD '{"params":"here"}'  Access the installed Codex protocol\n\nDefault: workspace-write with Codex approvals. --full-access grants this job\nunrestricted execution. Existing Codex login and configuration are retained.\n`;
+const help=`Fode • Linux Firefox / ChatGPT / Codex\n\n  fode launch codex                  Open Codex with Fode streaming into it\n  fode serve                         Run the persistent harness\n  fode run "task" [--cwd PATH] [--full-access] [--model NAME]\n  fode watch                         Stream ChatGPT, Codex and tool events\n  fode status                        Show connection and pending requests\n  fode stop                          Interrupt the current run\n  fode reply ID '{"decision":"accept"}'\n  fode rpc METHOD '{"params":"here"}'  Access the installed Codex protocol\n\nDefault: workspace-write with Codex approvals. --full-access grants this job\nunrestricted execution. Existing Codex login and configuration are retained.\n`;
 try {
-  if(command==='serve') await serve();
+  if(command==='launch') await launchCodex(args);
+  else if(command==='serve') await serve();
   else if(!command || ['help','--help','-h'].includes(command)) console.log(help);
   else {
     let type=command,data={};

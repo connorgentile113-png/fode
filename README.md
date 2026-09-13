@@ -31,6 +31,14 @@ fode status
 fode stop
 ```
 
+To open the Codex terminal UI with the same Fode-backed thread, run this in an interactive terminal:
+
+```sh
+fode launch codex --cwd "$PWD"
+```
+
+Type a prompt in that Codex window and it is sent through the active Fode/ChatGPT bridge. ChatGPT responses and Codex tool events stream back into the same UI. If the Firefox extension is not connected yet, the UI still opens and waits; load the extension and sign in to ChatGPT, then continue. This command uses Codex's local WebSocket app-server transport and does not create a second login.
+
 Alternatively click the Fode toolbar button, enter a task and an absolute working directory, then choose **Start task**. **Open pinned chat** is the only control that deliberately activates the managed tab.
 
 The default is Codex `workspace-write` with `on-request` approvals. To explicitly grant a task unrestricted terminal access:

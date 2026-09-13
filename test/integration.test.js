@@ -7,6 +7,7 @@ import net from 'node:net';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {Decoder,encode} from '../src/wire.js';
+import {WebSocket} from 'ws';
 
 test('daemon → native messaging → ChatGPT command → Codex streaming → result, approvals, reconnect and stop',async t=>{
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'fode-test-'));
@@ -47,6 +48,17 @@ rl.on('line',line=>{
   }
   const socket=net.connect(path.join(dir,'harness.sock'));await once(socket,'connect');
   const cli=client(socket,socket,()=>socket.destroy());
+  const launched=await cli.call('launch',{cwd:dir});
+  assert.equal(launched.threadId,'thread-test');
+  assert.equal((await fs.stat(path.join(dir,'codex-tui.sock'))).mode & 0o777,0o600);
+  const ws=new WebSocket('ws://localhost',{createConnection:()=>net.connect(path.join(dir,'codex-tui.sock'))});
+  t.after(()=>ws.terminate());await once(ws,'open');
+  const tuiEvents=[],tuiPending=new Map();
+  ws.on('message',bytes=>{const m=JSON.parse(bytes);if(tuiPending.has(m.id)){const p=tuiPending.get(m.id);tuiPending.delete(m.id);m.error?p.reject(new Error(m.error.message)):p.resolve(m.result);}else tuiEvents.push(m);});
+  const tuiCall=(method,params={})=>new Promise((resolve,reject)=>{const n=++id;tuiPending.set(n,{resolve,reject});ws.send(JSON.stringify({id:n,method,params}));});
+  await tuiCall('initialize',{});
+  await tuiCall('thread/resume',{threadId:launched.threadId});
+  assert.deepEqual((await tuiCall('thread/turns/list',{threadId:launched.threadId})).data,[]);
   const native=spawn(process.execPath,['src/native.js'],{env,stdio:['pipe','pipe','pipe']});
   const browser=client(native.stdout,native.stdin,()=>native.kill());
   await browser.call('hello',{role:'browser'});
@@ -59,6 +71,7 @@ rl.on('line',line=>{
   await browser.call('chat.ack',{id:first.data.id});
   await browser.call('chat.stream',{jobId:first.data.jobId,text,complete:false,messageId:'x'});
   assert.equal((await cli.call('status')).job.steps,0);
+  await waitFor(()=>tuiEvents.find(e=>e.method==='item/agentMessage/delta' && e.params.delta.includes('pwd')));
   await browser.call('chat.stream',{jobId:first.data.jobId,text,complete:true,messageId:'x'});
   await waitFor(()=>browser.events.find(e=>e.type==='codex' && e.data.id===900));
   await cli.call('reply',{id:900,result:{decision:'accept'}});
@@ -75,4 +88,10 @@ rl.on('line',line=>{
   await assert.rejects(browser2.call('rpc',{method:'model/list'}),/terminal-only/);
   await assert.rejects(cli.call('rpc',{method:'account/logout'}),/Authentication/);
   await cli.call('stop');assert.equal((await cli.call('status')).job.state,'stopped');
+  const turn=await tuiCall('turn/start',{threadId:launched.threadId,input:[{type:'text',text:'Task typed inside Codex'}]});
+  assert.equal(turn.turn.status,'inProgress');
+  await waitFor(()=>browser2.events.find(e=>e.type==='chat.send' && e.data.text.includes('Task typed inside Codex')));
+  await tuiCall('turn/interrupt',{threadId:launched.threadId,turnId:turn.turn.id});
+  assert.equal((await cli.call('status')).job.state,'stopped');
+  assert.ok((await tuiCall('thread/turns/list',{threadId:launched.threadId})).data.length>0);
 });

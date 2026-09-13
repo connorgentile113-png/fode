@@ -23,7 +23,7 @@ export class Codex extends EventEmitter {
         }
       } catch (error) { this.emit('diagnostic', error.message); }
     });
-    await this.rpc('initialize', {clientInfo:{name:'fode',title:'Fode',version:'0.1.0'},capabilities:{experimentalApi:true}});
+    this.initialization = await this.rpc('initialize', {clientInfo:{name:'fode',title:'Fode',version:'0.1.0'},capabilities:{experimentalApi:true}});
     this.send({method:'initialized',params:{}});
   }
   send(message) { this.child.stdin.write(JSON.stringify(message) + '\n'); }

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Linux Firefox \u2194 ChatGPT \u2194 Codex streaming harness",
+  "description": "Linux Firefox ↔ ChatGPT ↔ Codex streaming harness",
   "bin": {
     "fode": "src/cli.js"
   },
@@ -19,5 +19,8 @@
   "devDependencies": {
     "jsdom": "^30.0.1",
     "web-ext": "^10.6.0"
+  },
+  "dependencies": {
+    "ws": "^8.21.3"
   }
 }

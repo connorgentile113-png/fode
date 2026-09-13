@@ -6,6 +6,7 @@ import { Codex } from './codex.js';
 import { Decoder, encode } from './wire.js';
 import { socketPath, stateDir } from './paths.js';
 import { instruction, parseAction } from './protocol.js';
+import {TuiBridge} from './tui-bridge.js';
 
 export async function serve() {
   if (process.platform !== 'linux') throw new Error('Fode currently supports Linux only');
@@ -17,6 +18,8 @@ export async function serve() {
   if (occupied) throw new Error('Fode is already running');
   await fs.rm(socketPath, {force:true});
   const clients = new Set(); let browser = null, job = null, codex = null, boot = null;
+  let bridge, attachedThread=null, initialThread=null;
+  const tuiSocketPath=path.join(stateDir,'codex-tui.sock');
   const requests = new Map(); let outbox = null; let sequence = 0;
   const history = [];
   const send = (socket, value) => {
@@ -33,13 +36,16 @@ export async function serve() {
   const update = () => emit('status',status());
   const deliver = text => {
     outbox = {type:'chat.send',data:{id:randomUUID(),jobId:job.id,text}};
-    job.state = 'waiting-chatgpt'; send(browser,outbox); update();
+    job.state = 'waiting-chatgpt';
+    bridge?.startChat(job.threadId,job.steps===0?job.prompt:null);
+    send(browser,outbox); update();
   };
   const getCodex = async () => {
     if (boot) return boot;
     codex = new Codex();
     codex.on('exit', message => { boot=null; requests.clear(); if(job && !['done','stopped'].includes(job.state)) job.state='error'; emit('error',message); update(); });
     codex.on('event', m => {
+      bridge?.event(m);
       if (m.id !== undefined) requests.set(m.id,m);
       emit('codex',m);
       if (m.id !== undefined) update();
@@ -66,11 +72,19 @@ export async function serve() {
         return status();
       case 'status': return status();
       case 'watch': for(const e of history) send(c,e); return status();
+      case 'launch':
       case 'start': {
-        if(job && !['done','stopped','error'].includes(job.state)) throw new Error('A job is active. Stop it before starting another.');
-        if(typeof d.prompt!=='string' || !d.prompt.trim() || d.prompt.length>100_000) throw new Error('A prompt of 1–100000 characters is required');
+        const preparing=m.type==='launch';
+        if(preparing && c===browser)throw new Error('Launching Codex is terminal-only');
+        if(preparing && job?.threadId && job.state!=='error') {
+          attachedThread=job.threadId;
+          return {threadId:job.threadId,cwd:job.cwd,browser:!!browser,endpoint:`unix://${tuiSocketPath}`};
+        }
+        if(job && !['ready','done','stopped','error'].includes(job.state)) throw new Error('A job is active. Stop it before starting another.');
+        if(!preparing && (typeof d.prompt!=='string' || !d.prompt.trim() || d.prompt.length>100_000)) throw new Error('A prompt of 1–100000 characters is required');
         const cwd=path.resolve(d.cwd || process.cwd());
         if(!(await fs.stat(cwd)).isDirectory()) throw new Error('Working directory does not exist');
+        const reuse=job?.threadId===attachedThread && job?.cwd===cwd ? attachedThread : null;
         job={id:randomUUID(),nonce:randomUUID(),prompt:d.prompt,cwd,state:'starting',steps:0,seen:new Set(),output:'',maxSteps:d.maxSteps || 12};
         const startingJob=job;
         try {
@@ -82,9 +96,15 @@ export async function serve() {
           const models=await cx.rpc('model/list',{});
           const defaultModel=models.data?.find(m=>m.isDefault)?.model;
           if(d.model || defaultModel) params.model=d.model || defaultModel;
-          const result=await cx.rpc('thread/start',params);
+          const result=reuse?{thread:{id:reuse}}:await cx.rpc('thread/start',params);
+          if(!reuse)initialThread=structuredClone(result);
           if(job!==startingJob || job.state==='stopped') return status();
-          job.threadId=result.thread.id; deliver(instruction(job));
+          job.threadId=result.thread.id;
+          if(preparing) {
+            job.state='ready';attachedThread=job.threadId;update();
+            return {threadId:job.threadId,cwd,browser:!!browser,endpoint:`unix://${tuiSocketPath}`};
+          }
+          deliver(instruction(job));
         } catch(error) {job.state='error';update();throw error;}
         return status();
       }
@@ -98,8 +118,11 @@ export async function serve() {
       case 'chat.stream': {
         if(c!==browser || d.jobId!==job?.id) throw new Error('Unmanaged chat');
         if(job.state!=='waiting-chatgpt') return {};
+        if(job.seen.has(d.messageId))return {};
         emit('chatgpt',{text:d.text,complete:d.complete});
-        if(!d.complete || job.seen.has(d.messageId)) return {};
+        bridge?.streamChat('[ChatGPT / Fode]\n'+d.text);
+        if(!d.complete) return {};
+        bridge?.endChat();
         job.seen.add(d.messageId);
         const action=parseAction(d.text,job.nonce);
         if(!action) {job.state='done';emit('done',d.text);update();return {};}
@@ -115,6 +138,7 @@ export async function serve() {
       }
       case 'stop':
         outbox=null;
+        bridge?.endChat('interrupted');
         if(job) {job.state='stopped'; if(job.turnId) await codex.rpc('turn/interrupt',{threadId:job.threadId,turnId:job.turnId});}
         send(browser,{type:'chat.stop'});update();return status();
       case 'rpc': {
@@ -128,6 +152,33 @@ export async function serve() {
       default: throw new Error('Unknown message type');
     }
   };
+  bridge=new TuiBridge({socketPath:tuiSocketPath,getCodex,
+    reply:m=>{
+      if(!requests.has(m.id))return;
+      codex.send(m);requests.delete(m.id);update();
+    },
+    request:async(method,params)=>{
+      // Codex doesn't persist a rollout until its first real turn. The TUI still
+      // needs to attach while Fode is idle or waiting for the first ChatGPT reply.
+      if(method==='thread/resume' && params.threadId===initialThread?.thread.id && !job?.steps) {
+        return structuredClone(initialThread);
+      }
+      if(params.threadId===initialThread?.thread.id && !job?.steps) {
+        if(['thread/turns/list','thread/items/list'].includes(method))return {data:[],nextCursor:null,backwardsCursor:null};
+        if(method==='thread/read')return {thread:structuredClone(initialThread.thread)};
+      }
+      if(method==='turn/interrupt' && bridge.chat?.turn.id===params.turnId) {
+        await handle(null,{type:'stop'});return {};
+      }
+      if(method==='turn/start' && params.threadId===attachedThread && params.input?.every(i=>i.type==='text')) {
+        if(job?.state==='running-codex')return (await getCodex()).rpc(method,params);
+        await handle(null,{type:'start',data:{prompt:params.input.map(i=>i.text).join('\n'),cwd:job.cwd}});
+        return {turn:bridge.chat.turn};
+      }
+      return (await getCodex()).rpc(method,params);
+    }
+  });
+  await bridge.listen();
   const server=net.createServer(c => {
     clients.add(c); const decoder=new Decoder(); c.pipe(decoder);
     // Serialize actions per connection so stream completion cannot race with itself.
@@ -141,7 +192,7 @@ export async function serve() {
   });
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(socketPath,resolve);});
   await fs.chmod(socketPath,0o600);
-  const close=()=>{codex?.close(); for(const c of clients)c.destroy();server.close();fs.rm(socketPath,{force:true}).finally(()=>process.exit(0));};
+  const close=()=>{codex?.close(); for(const c of clients)c.destroy();server.close();Promise.all([bridge.close(),fs.rm(socketPath,{force:true})]).finally(()=>process.exit(0));};
   process.once('SIGTERM',close);process.once('SIGINT',close);
   console.log(`Fode listening on ${socketPath}`);
 }
