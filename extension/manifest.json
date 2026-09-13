@@ -1,0 +1,11 @@
+{
+  "manifest_version": 2,
+  "name": "Fode — ChatGPT terminal bridge",
+  "version": "0.1.0",
+  "description": "Connect a dedicated ChatGPT tab to your local Codex terminal harness on Linux.",
+  "browser_specific_settings": {"gecko": {"id": "fode@fode.local", "strict_min_version": "142.0", "data_collection_permissions": {"required": ["websiteContent", "websiteActivity"]}}},
+  "permissions": ["nativeMessaging", "storage", "alarms", "tabs", "https://chatgpt.com/*"],
+  "background": {"scripts": ["background.js"], "persistent": true},
+  "browser_action": {"default_title": "Fode", "default_popup": "panel.html"},
+  "content_scripts": [{"matches": ["https://chatgpt.com/*"], "js": ["content.js"], "run_at": "document_idle"}]
+}

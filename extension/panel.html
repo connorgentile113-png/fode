@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fode</title><link rel="stylesheet" href="panel.css"></head>
+<body><header><div><span class="eyebrow">LOCAL / LINUX</span><h1>fode<span>↗</span></h1></div><span id="connection" role="status">Connecting</span></header>
+<main><p class="intro">A quiet bridge.<br>A working terminal.</p>
+<form id="task"><label for="prompt">Send to ChatGPT</label><textarea id="prompt" placeholder="What are we building?" required></textarea><label for="cwd">Working directory</label><input id="cwd" placeholder="/home/you/project" required><label class="check"><input type="checkbox" id="full"> Full terminal access for this task</label><button type="submit">Start task <span>↗</span></button></form>
+<div class="actions"><button id="show" class="secondary">Open pinned chat</button><button id="stop" class="secondary">Stop task</button></div>
+<section><div class="section-title">LIVE ACTIVITY <span id="state">Idle</span></div><pre id="events" aria-live="polite">Waiting for a signal.</pre></section>
+<section id="requests"></section><p id="error" role="alert"></p><footer>ChatGPT → Codex → your workspace</footer></main><script src="panel.js"></script></body></html>

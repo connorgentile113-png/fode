@@ -1,0 +1,23 @@
+{
+  "name": "fode",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Linux Firefox \u2194 ChatGPT \u2194 Codex streaming harness",
+  "bin": {
+    "fode": "src/cli.js"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "test": "node --test",
+    "lint:extension": "web-ext lint --source-dir extension",
+    "build": "web-ext build --source-dir extension --artifacts-dir dist --overwrite-dest",
+    "install:local": "node scripts/install.js"
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1",
+    "web-ext": "^10.6.0"
+  }
+}

@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import {JSDOM} from 'jsdom';
+const source=await fs.readFile(new URL('../extension/content.js',import.meta.url),'utf8');
+test('content adapter sends in background, streams fenced code, completes once and deduplicates delivery',async()=>{
+  const dom=new JSDOM('<div id="prompt-textarea" contenteditable="true"></div><button data-testid="send-button">Send</button>',{url:'https://chatgpt.com/',runScripts:'outside-only'});
+  const {window:w}=dom;let handler;const messages=[];
+  w.browser={runtime:{onMessage:{addListener(fn){handler=fn;}},sendMessage:async m=>{messages.push(m);return {};}}};
+  let clicks=0;w.document.querySelector('button').onclick=()=>{clicks++;w.document.querySelector('#prompt-textarea').textContent='';};
+  w.eval(source);
+  const data={id:'delivery-1',jobId:'job-1',text:'Do work'};
+  assert.deepEqual(JSON.parse(JSON.stringify(await handler({type:'send',data}))),{sent:true});
+  await handler({type:'send',data});assert.equal(clicks,1);
+  const article=w.document.createElement('article');
+  article.innerHTML='<div data-message-author-role="assistant" data-message-id="a1"><pre><code class="language-fode">{"nonce":"n","tool":"shell","command":"pwd"}</code></pre></div><button data-testid="copy-turn-action-button">Copy</button>';
+  w.document.body.append(article);
+  await new Promise(r=>setTimeout(r,2300));
+  const streams=messages.filter(m=>m.type==='stream');
+  assert.ok(streams.some(m=>!m.data.complete && m.data.text.includes('```fode')));
+  assert.equal(streams.filter(m=>m.data.complete).length,1);
+  assert.equal(w.document.activeElement,w.document.body,'No focus stolen');
+  dom.window.close();
+});
+test('existing user draft is never overwritten',async()=>{
+  const dom=new JSDOM('<div id="prompt-textarea" contenteditable="true">My draft</div>',{url:'https://chatgpt.com/',runScripts:'outside-only'});let handler;
+  dom.window.browser={runtime:{onMessage:{addListener(fn){handler=fn;}},sendMessage:async()=>({})}};dom.window.eval(source);
+  const result=await handler({type:'send',data:{id:'a',text:'Replace'}});
+  assert.match(result.error,/draft/);assert.equal(dom.window.document.querySelector('div').textContent,'My draft');dom.window.close();
+});
